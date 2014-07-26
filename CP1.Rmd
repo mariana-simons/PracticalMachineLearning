@@ -1,0 +1,149 @@
+Practical Machine Learning Course; Course Project 
+
+Predicting the quality of a physical activity
+==========================================================================
+
+# Executive Summary
+In this report we investigate the question "How well people perform physical activity such as barbell lifts?". To address this question we use data collected from 6 participants wearing accelerometers on their belt, forearm, arm, and dumbbell. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. Our goal is to predict the manner in which the participants did the exercise. First, we perform data preprocessing to remove covariates with many missing values, near zero covariates and  to reduce the data to a smaller sub-space (based on PCA) where the new variables are uncorrelated with one another. Second, we build a machine learning algorithm based on random forest. Last, we estimate the out-of-sample error using a cross-validation approach.    
+
+# Data Loading
+
+First we download the [training] (https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv) and [testing] (https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv) data for the project, both coming from this source: http://groupware.les.inf.puc-rio.br/har. Then, we read the .cvs files in R as shown below. The training and testing data are comma-separated values (csv) files where missing values are coded as NA. The training data set has 19 622 observations of 160 variables and the testing data set has 20 observations of 160 variables. 
+ 
+```{r, warning=FALSE}
+library(caret)
+library(randomForest)
+training <- read.csv("./pml-training.csv")
+testing <- read.csv("./pml-testing.csv")
+dim(training)
+dim(testing)
+```
+
+The outcome we would like to predict is the "classe" variable, which is a factor with the following 5 levels: 
+ - "A"  Unilateral Dumbbell Biceps Curl performed exactly according to the specification  
+ - "B"  throwing the elbows to the front  
+ - "C"  lifting the dumbbell only halfway  
+ - "D"  lowering the dumbbell only halfway  
+ - "E"  throwing the hips to the front.
+
+Summary of the number of observations in each class is shown below and illustrates that they are fairly equally distributed with slight prevalance of class A:
+```{r}
+table(training$classe)
+```
+Note that the testing dataset will be used at the very end to generate 20 predictions for assignment submission and it would not be used further in this report. However, it should go throughout all preprocessing procedures performed on the training dataset and described in the chapter below.
+
+# Data Preprocessing
+
+## Missing values
+From the training dataset summary **str(training)** (not printed here due to very long output) it appears there are a lot of missing values, which is a common problem with raw data from personal activity sensors.  
+
+First, let's calculate the % of missing values in each column and only select those columns which have at least 50% non-missing values. In fact, most of the columns eleminated by this procedure have 98% missing values, e.g. columns 18, 19, etc.. In this way the number of predictors is reduced from 160 to 93. 
+
+```{r}
+colInd <- c()
+for (i in seq_len(ncol(training))){
+        if (mean(is.na(training[,i]))<0.5){
+                colInd <- c(colInd, i)
+        }
+}
+trainingTidy <- training[,colInd]
+dim(trainingTidy)
+```
+
+## Removing near zero covariates
+Some of our predictors might have few unique values that occur with very low frequencie.
+Then, these predictors may become zero-variance predictors when the data are split
+into cross-validation/bootstrap sub-samples. Hence, let's identified and eliminated prior to modeling the "near-zero-variance" predictors. In this way the number of predictors is reduced from 93 to 59. 
+
+```{r, cache=TRUE}
+nzv <- nearZeroVar(trainingTidy)
+trainingTidy <- trainingTidy[,-nzv]
+dim(trainingTidy)
+```
+
+## Removing irrelevant columns 
+Further,  we remove the first 6 columns related to user names, raw timestamps, num of windows, etc., resulting in 53 candidate predictors.
+
+```{r}
+trainingTidy <- trainingTidy[,-c(1:6)]
+```
+ 
+## Data splitting
+To estimate the testing set accuracy (out-of-sample error) we follow a cross-validation approach on the trainingTidy set:
+
+1. Split the trainigTidy into training and testing subsets
+2. Build a model on the training subset of trainingTidy
+3. Evaluate the out-of-sample error on the testing subset
+4. Repeat and average the estimated errors. 
+
+Below we show Steps 1-3. We do not perform Step 4 since the model we select has built-in resampling and averaging of the estimated errors itself. 
+
+```{r}
+set.seed(3433)
+inTrain <- createDataPartition(y = trainingTidy$classe, p=0.7, list = FALSE)
+trainingTidy <- trainingTidy[inTrain, ]
+testingTidy <- trainingTidy[-inTrain, ]
+dim(trainingTidy)
+dim(testingTidy)
+```
+
+## PCA
+As a final step of data preprocessing we'll use principal component analysis (PCA) to transform the data to a smaller sub-space where the new variables are uncorrelated with one another. Since PCA is very sensitive to outliers as well variables with skewed distributions we performed first BoxCox transformation followed by PCA.
+
+```{r, cache = TRUE}
+# index of the outcome
+outInd <- dim(trainingTidy)[2]
+# preProcess() with method = (BoxCox, pca)
+set.seed(3433)
+preProc <- preProcess(trainingTidy[,-outInd], method = c("BoxCox", "pca"), thresh = 0.8)
+trainingPC <- predict(preProc, trainingTidy[,-outInd])
+nComp <- preProc$numComp
+```
+The number of principal components needed to capture 80% of the variance is `r nComp`. Therefore, the final number of predictors we will use for predictive modelling is `r nComp`. 
+
+# Exploratory data analysis 
+
+Below a plot of predictors as well as a plot of outcome vs. a predictor.
+```{r plotPredictors, fig.height= 4, fig.width=6, fig.align='center'}
+qplot(PC12, PC1, color=trainingTidy$classe, data = trainingPC)
+```
+
+```{r plotPredictorOutcome, fig.height= 4, fig.width=6, fig.align='center'}
+qplot(PC12, trainingTidy$classe, color=trainingTidy$classe, data = trainingPC, ylab = "classe")
+```
+
+# Model fitting
+Because of the characteristic noise in the activity sensor data we use a Random Forest model, which has excellent accuracy among current machine learning algorithms. 
+
+```{r, cache=TRUE}
+set.seed(32343)
+modelFit <- train(trainingTidy$classe ~ ., method = "rf", data = trainingPC)
+finMod <- modelFit$finalModel
+```
+
+Summary of the final model
+```{r}
+print(finMod)
+```
+The accuracy on the training subset is:
+```{r}
+modelFit
+```
+The accuracy on the testing subset (which is an **estimate of the out-of-sample error**) is:
+```{r}
+testingPC <- predict(preProc, testingTidy[,-outInd])
+predTestingPC <- predict(modelFit, testingPC)
+confusionMatrix(predTestingPC, testingTidy$classe) 
+```
+
+The order of variable importance is:
+```{r}
+varImp(modelFit)
+```
+
+Finally, let's plot FALSE predicted value using the 2 most important variables:
+```{r plotpredRight, fig.height= 4, fig.width=6, fig.align='center'}
+predRight <- predTestingPC == testingTidy$classe
+qplot(PC12, PC8, color = predRight, data = testingPC)
+```
+
